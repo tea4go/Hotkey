@@ -1,75 +1,66 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"log"
 	"os"
-	"os/signal"
-	"sync"
-	"syscall"
+	"os/exec"
 
-	"github.com/autohotkey/gohotkey/internal/evdev"
+	"github.com/BurntSushi/xgb"
+	"github.com/BurntSushi/xgb/xproto"
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "debug-evdev" {
-		fmt.Fprintf(os.Stderr, "用法: %s debug-evdev\n", os.Args[0])
-		os.Exit(1)
+	conn, err := xgb.NewConn()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+
+	setup := xproto.Setup(conn)
+	root := setup.DefaultScreen(conn).Root
+
+	// Grab Ctrl+Shift+D (keycode 40 is 'd' on most layouts)
+	// Modifiers: Shift=1, Control=4
+	modMask := uint16(xproto.ModMaskShift | xproto.ModMaskControl)
+
+	// Grab key 40 (D key) with Ctrl+Shift
+	err = xproto.GrabKeyChecked(conn, true, root, modMask, 40,
+		xproto.GrabModeAsync, xproto.GrabModeAsync).Check()
+	if err != nil {
+		log.Fatalf("Failed to grab Ctrl+Shift+D: %v", err)
 	}
 
-	if err := runDebugEvdev(); err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
-		os.Exit(1)
+	fmt.Println("监听 Ctrl+Shift+D，按该组合键启动终端...")
+
+	for {
+		ev, err := conn.WaitForEvent()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		switch e := ev.(type) {
+		case xproto.KeyPressEvent:
+			if e.Detail == 40 {
+				fmt.Println("检测到 Ctrl+Shift+D，启动终端...")
+				go runCommand()
+			}
+		}
 	}
 }
 
-func runDebugEvdev() error {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+func runCommand() {
+	terminals := []string{"deepin-terminal", "alacritty", "gnome-terminal", "xfce4-terminal", "xterm"}
 
-	devices, err := evdev.Discover()
-	if err != nil {
-		return err
+	for _, term := range terminals {
+		cmd := exec.Command(term)
+		cmd.Env = append(os.Environ(), "DISPLAY="+os.Getenv("DISPLAY"))
+		err := cmd.Start()
+		if err == nil {
+			fmt.Printf("✓ 启动了 %s\n", term)
+			return
+		}
 	}
 
-	if len(devices) == 0 {
-		fmt.Println("[discover] 未发现键盘设备")
-		return nil
-	}
-
-	fmt.Printf("[discover] 找到 %d 个键盘设备：\n", len(devices))
-	for _, d := range devices {
-		fmt.Printf("  - %s  %s\n", d.Path, d.Name)
-	}
-	fmt.Println()
-
-	var wg sync.WaitGroup
-	for _, d := range devices {
-		wg.Add(1)
-		go func(dev *evdev.Device) {
-			defer wg.Done()
-			for ev := range dev.Events() {
-				action := "?"
-				switch ev.Value {
-				case 0:
-					action = "释放"
-				case 1:
-					action = "按下"
-				case 2:
-					action = "重复"
-				}
-				fmt.Printf("[event] %s (%s) code=%d value=%d (%s)\n",
-					dev.Path, dev.Name, ev.Code, ev.Value, action)
-			}
-		}(d)
-	}
-
-	<-ctx.Done()
-	fmt.Printf("\n[shutdown] 关闭 %d 个设备\n", len(devices))
-	for _, d := range devices {
-		d.Close()
-	}
-	wg.Wait()
-
-	return nil
+	fmt.Println("✗ 未找到可用的终端程序")
 }
