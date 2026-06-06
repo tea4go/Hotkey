@@ -150,11 +150,21 @@ func ioc(dir, typ, nr, size uintptr) uintptr {
 
 ### 3. 键盘判定规则
 
-通过 `EVIOCGBIT(EV_KEY, ...)` 读到一段 bitmap（最长 `KEY_MAX/8 = 96` 字节就够，M1 用 96 字节）。判定为键盘的条件：
+通过 `EVIOCGBIT(EV_KEY, ...)` 读到一段 bitmap（最长 `KEY_MAX/8 = 96` 字节就够，M1 用 96 字节）。
 
-> 在 `KEY_A`(30) 到 `KEY_Z`(44) 共 15 个位中，至少有 12 个被置位。
+字母键在 `input-event-codes.h` 中按 QWERTY 行物理布局排列，并非连续：
 
-阈值取 12 而非 26：U.S. 布局以外的键盘（dvorak/colemak/中文键盘）键码相同，但保留余量避免漏判仅有少量按键的特殊设备（如电源按钮、音量旋钮）。
+| 行 | 键码 |
+|----|------|
+| Q W E R T Y U I O P | 16 ~ 25 |
+| A S D F G H J K L   | 30 ~ 38 |
+| Z X C V B N M       | 44 ~ 50 |
+
+判定为键盘的条件：
+
+> 上述 26 个字母键码中，至少有 20 个在 bitmap 中被置位。
+
+阈值取 20 而非 26：键盘布局以外的键码相同（dvorak/colemak 仅影响 keymap，不影响 evdev keycode），保留余量避免误把仅含少量按键的设备（电源按钮、音量旋钮、笔记本上 Fn 派生的伪键盘节点）当成主键盘。
 
 ### 4. 读取循环
 
